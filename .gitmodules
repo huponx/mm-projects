@@ -1,0 +1,39 @@
+[submodule "actions"]
+	path = actions
+	url = https://github.com/huponx/actions.git
+[submodule "bvchain"]
+	path = bvchain
+	url = https://github.com/huponx/bvchain.git
+[submodule "charts"]
+	path = charts
+	url = https://github.com/huponx/charts.git
+[submodule "courier"]
+	path = courier
+	url = https://github.com/huponx/courier.git
+[submodule "db-migration"]
+	path = db-migration
+	url = https://github.com/huponx/db-migration.git
+[submodule "gatekeeper"]
+	path = gatekeeper
+	url = https://github.com/huponx/gatekeeper.git
+[submodule "gocommon"]
+	path = gocommon
+	url = https://github.com/huponx/gocommon.git
+[submodule "identity"]
+	path = identity
+	url = https://github.com/huponx/identity.git
+[submodule "mm-ansible"]
+	path = mm-ansible
+	url = https://github.com/huponx/mm-ansible.git
+[submodule "mm-deploy"]
+	path = mm-deploy
+	url = https://github.com/huponx/mm-deploy.git
+[submodule "protogen"]
+	path = protogen
+	url = https://github.com/huponx/protogen.git
+[submodule "protos"]
+	path = protos
+	url = https://github.com/huponx/protos.git
+[submodule "web"]
+	path = web
+	url = https://github.com/huponx/web.git
