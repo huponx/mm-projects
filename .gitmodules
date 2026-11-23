@@ -37,3 +37,6 @@
 [submodule "web"]
 	path = web
 	url = https://github.com/huponx/web.git
+[submodule "dictionary"]
+	path = dictionary
+	url = https://github.com/huponx/dictionary.git

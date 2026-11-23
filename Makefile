@@ -4,11 +4,11 @@
 
 help:
 	@printf '%s\n' \
-		'make up        Postgres/Redis + schema, identity-setup, identity, gatekeeper, web apps (everything)' \
+		'make up        Postgres/Redis + schema, identity-setup, identity, gatekeeper, dictionary, web apps (everything)' \
 		'make backend   the same without the web apps' \
 		'make web       only the web apps (dict :3000, bill :3001, admin :3002)' \
-		'make down      stop identity, gatekeeper, courier and the web apps (containers keep running)' \
-		'make down-backend  stop only identity, gatekeeper and courier' \
+		'make down      stop identity, gatekeeper, dictionary, courier and the web apps (containers keep running)' \
+		'make down-backend  stop only identity, gatekeeper, dictionary and courier' \
 		'make down-web      stop only the web apps' \
 		'make down-all  stop them and the Postgres/Redis containers' \
 		'make status    what runs, with the URLs' \
@@ -16,9 +16,10 @@ help:
 		'make setup     re-run identity-setup (first admin, gateway client; safe to repeat)' \
 		'make db        only Postgres, Redis and the schema' \
 		'make reset     wipe the database volumes and local keys (asks first)' \
-		'make test      go tests of identity, gatekeeper, courier and the web checks' \
+		'make test      go tests of identity, gatekeeper, dictionary, courier and the web checks' \
 		'' \
 		'WITH_COURIER=1 make up   also start courier and its worker' \
+		'WITH_DICTIONARY=0 make up   do not start the dictionary service' \
 		'SETUP_ADMIN_PASSWORD=... make up   admin password (default in scripts/local.sh)'
 
 up:
@@ -60,5 +61,6 @@ reset:
 test:
 	cd identity && go test -race ./...
 	cd gatekeeper && go test -race ./...
+	cd dictionary && go test -race ./...
 	cd courier && go test ./...
 	cd web && pnpm run ci

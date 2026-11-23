@@ -31,6 +31,7 @@ steps below are what it automates.
 | identity HTTP (OAuth/OIDC, sign in pages) | 8080 | default; issuer `http://localhost:8080` |
 | identity gRPC (admin API) | 9090 | default; called by the gateway |
 | gatekeeper (the gateway the web apps call) | 8081 | what `apps/*/public/config.js` points at |
+| dictionary gRPC (`make up` starts it; `WITH_DICTIONARY=0` skips it) | 9092 | `PORT` (`DICTIONARY_ISSUER`, `DICTIONARY_JWKS_URL`; see `dictionary/.env.example`) |
 | courier gRPC (notifications, optional) | 9091 | `PORT` (default 9090, see below) |
 | courier worker health (optional) | 8082 | `HEALTH_ADDR` (default `:8081`, see below) |
 | web `dict` / `bill` / `admin` | 3000 / 3001 / 3002 | Vite dev servers |
@@ -148,7 +149,7 @@ Each app is its own Vite dev server on its own port. Start the ones you need, **
 | App | Command | URL | What it is |
 | --- | --- | --- | --- |
 | `admin` | `pnpm dev:admin` | http://localhost:3002 | identity administration: users, roles, clients, exchange policies, MFA |
-| `dict` | `pnpm dev:dict` | http://localhost:3000 | frame app: login, user in the header, sign out, permission gated menu, sample page `Entries` |
+| `dict` | `pnpm dev:dict` | http://localhost:3000 | dictionary: look words up (English or English-Vietnamese), save words, export an Anki deck (needs `dictionary:word:read` / `dictionary:word:write` and the dictionary service) |
 | `bill` | `pnpm dev:bill` | http://localhost:3001 | same frame for the bill service, sample page `Invoices` |
 
 `make dev-admin`, `make dev-dict` and `make dev-bill` do the same.
@@ -171,11 +172,13 @@ the app. The cookie session belongs to the gateway, so signing in on one app sig
 - **Ports are fixed** (`strictPort`): 3000, 3001 and 3002 are the origins registered in step 3 (post logout URIs)
   and in `GATEKEEPER_UI_ORIGINS` (step 4). If a port is taken Vite stops instead of choosing another one, because
   another port would be an unknown origin (CORS and logout would fail).
-- **`dict` and `bill` are frames.** Their menu entry (`Entries` needs `dict:entry:read`, `Invoices` needs
-  `bill:invoice:read`) only appears for a user with that permission, and their pages call
-  `/api/dict/entries` and `/api/bill/invoices`, which no service backs yet, so the gateway answers 404 and the page
-  shows it. They still prove the login, the session, the menu per permission and the sign out. To see the menu
-  entries, create a role with `dict:entry:read` or `bill:invoice:*` in the admin app and assign it to a user.
+- **`dict` talks to the dictionary service** (`/api/dictionary/...`, `make up` starts it; restart gatekeeper after
+  adding the service so it loads the routes). The menu and the buttons need `dictionary:word:read` (look up, list)
+  and `dictionary:word:write` (save, delete, export): the admin has `*`; for another user create a role with
+  `dictionary:word:*` in the admin app. Audio plays straight from the dictionary sources (CSP `media-src`).
+- **`bill` is a frame.** Its menu entry (`Invoices` needs `bill:invoice:read`) only appears for a user with that
+  permission, and its page calls `/api/bill/invoices`, which no service backs yet, so the gateway answers 404 and
+  the page shows it.
 - **`API_BASE`** of each app is in `apps/<app>/public/config.js` (`http://localhost:8081`, the gateway of step 4).
 
 ## 6. courier (optional)
