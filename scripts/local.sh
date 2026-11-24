@@ -9,10 +9,12 @@
 #   scripts/local.sh status             what runs, with the URLs
 #   scripts/local.sh logs [name]        follow a log (identity, gatekeeper, dictionary, courier, courier-worker, dict, bill, admin)
 #   scripts/local.sh setup              (re)run identity-setup: first admin and the gateway client
-#   scripts/local.sh reset              wipe Postgres/Redis volumes (asks first) and the local keys
+#   scripts/local.sh reset              wipe Postgres/Redis volumes (asks first), the local keys and the card images
 #
 # Variables: SETUP_ADMIN_PASSWORD (default below), WITH_COURIER=1 to start courier and its worker,
-# WITH_DICTIONARY=0 to skip the dictionary service (it is on by default).
+# WITH_DICTIONARY=0 to skip the dictionary service (it is on by default). The card images of the dictionary
+# are files in .local/images; DICTIONARY_IMAGE_MAX_BYTES, _MAX_DIM, _MAX_PIXELS and _USER_QUOTA exported before
+# `up` reach the service (the defaults apply otherwise).
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -180,7 +182,8 @@ dictionary() {
   check_port 9092 dictionary
   say "dictionary (gRPC 9092)"
   build dictionary "$ROOT/dictionary" ./cmd/dictionary
-  start_proc dictionary "$ROOT/dictionary" env PORT=9092 \
+  mkdir -p "$LOCAL/images"
+  start_proc dictionary "$ROOT/dictionary" env PORT=9092 DICTIONARY_IMAGE_DIR="$LOCAL/images" \
     DICTIONARY_ISSUER=http://localhost:8080 DICTIONARY_JWKS_URL=http://localhost:8080/.well-known/jwks.json \
     DICTIONARY_IDENTITY_ADDR=localhost:9090 DICTIONARY_TOKEN_URL=http://localhost:8080/oauth2/token \
     DICTIONARY_CLIENT_ID=dictionary-dev DICTIONARY_CLIENT_SECRET="$(cat "$LOCAL/dictionary.secret")" \
@@ -280,10 +283,11 @@ cmd_logs() {
 }
 
 cmd_reset() {
-  read -r -p "Delete Postgres and Redis data and the local keys in .local? [y/N] " a
+  read -r -p "Delete Postgres and Redis data, the local keys and the card images (.local/images) in .local? [y/N] " a
   [ "$a" = y ] || exit 0
   cmd_down
   compose down -v
+  rm -rf "$LOCAL/images"
   rm -f "$LOCAL"/k1.pem "$LOCAL"/mfa.key "$LOCAL"/session.key "$LOCAL"/gatekeeper.secret
   echo "reset done; run: scripts/local.sh up"
 }

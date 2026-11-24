@@ -7,8 +7,8 @@ GO_MODULES := gocommon identity gatekeeper dictionary courier bvchain
 
 help:
 	@printf '%s\n' \
-		'make up        Postgres/Redis + schema, identity-setup, identity, gatekeeper, dictionary, web apps (everything)' \
-		'make backend   the same without the web apps' \
+		'make up        Postgres/Redis + schema, identity-setup, identity, gatekeeper, dictionary, web apps (everything; card images are stored in .local/images)' \
+		'make backend   the same without the web apps (card images in .local/images)' \
 		'make web       only the web apps (dict :3000, bill :3001, admin :3002)' \
 		'make down      stop identity, gatekeeper, dictionary, courier and the web apps (containers keep running)' \
 		'make down-backend  stop only identity, gatekeeper, dictionary and courier' \
@@ -18,7 +18,7 @@ help:
 		'make logs      follow all logs (make logs N=identity for one)' \
 		'make setup     re-run identity-setup (first admin, gateway client; safe to repeat)' \
 		'make db        only Postgres, Redis and the schema' \
-		'make reset     wipe the database volumes and local keys (asks first)' \
+		'make reset     wipe the database volumes, local keys and card images (asks first)' \
 		'make upgrade   make upgrade in every Go module (PATCH=1 make upgrade: patch versions only)' \
 		'make checkout main   every sub-folder that is a git repository goes to main (stops when one has uncommitted changes)' \
 		'make git-reset   asks first, then drops every uncommitted change and deletes new uncommitted files in the sub-folders that are git repositories' \
@@ -28,7 +28,7 @@ help:
 		'make test      go tests of identity, gatekeeper, dictionary, courier and the web checks' \
 		'' \
 		'WITH_COURIER=1 make up   also start courier and its worker' \
-		'WITH_DICTIONARY=0 make up   do not start the dictionary service' \
+		'WITH_DICTIONARY=0 make up   do not start the dictionary service (and no .local/images)' \
 		'SETUP_ADMIN_PASSWORD=... make up   admin password (default in scripts/local.sh)'
 
 up:
@@ -73,6 +73,9 @@ test:
 	cd dictionary && go test -race ./...
 	cd courier && go test ./...
 	cd web && pnpm run ci
+	@if command -v helm >/dev/null; then \
+		cd dictionary/charts/dictionary && helm lint . -f ci/full-values.yaml; \
+	else echo 'helm not found: skipping the dictionary chart lint'; fi
 
 upgrade:
 	@for m in $(GO_MODULES); do \
@@ -81,7 +84,7 @@ upgrade:
 	done
 
 # What zip and replace leave out: local state, caches output.
-IGNORE := .local .memsearch .pnpm-store node_modules dist coverage .turbo .DS_Store .venv
+IGNORE := .local .memsearch .pnpm-store node_modules dist coverage .turbo .DS_Store .venv mm-deploy-diffs go-anki-deck
 # NAME is the name of the archive without the extension (make zip NAME=backup -> backup.ipx).
 NAME ?= t-projects
 IPX ?= $(NAME).ipx

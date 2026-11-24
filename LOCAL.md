@@ -31,7 +31,7 @@ steps below are what it automates.
 | identity HTTP (OAuth/OIDC, sign in pages) | 8080 | default; issuer `http://localhost:8080` |
 | identity gRPC (admin API) | 9090 | default; called by the gateway |
 | gatekeeper (the gateway the web apps call) | 8081 | what `apps/*/public/config.js` points at |
-| dictionary gRPC (`make up` starts it; `WITH_DICTIONARY=0` skips it) | 9092 | `PORT` (`DICTIONARY_ISSUER`, `DICTIONARY_JWKS_URL`; see `dictionary/.env.example`) |
+| dictionary gRPC (`make up` starts it; `WITH_DICTIONARY=0` skips it) | 9092 | `PORT` (`DICTIONARY_ISSUER`, `DICTIONARY_JWKS_URL`, `DICTIONARY_IMAGE_DIR=.local/images`; see `dictionary/.env.example`) |
 | courier gRPC (notifications, optional) | 9091 | `PORT` (default 9090, see below) |
 | courier worker health (optional) | 8082 | `HEALTH_ADDR` (default `:8081`, see below) |
 | web `dict` / `bill` / `admin` | 3000 / 3001 / 3002 | Vite dev servers |
@@ -176,6 +176,11 @@ the app. The cookie session belongs to the gateway, so signing in on one app sig
   adding the service so it loads the routes). The menu and the buttons need `dictionary:word:read` (look up, list)
   and `dictionary:word:write` (save, delete, export): the admin has `*`; for another user create a role with
   `dictionary:word:*` in the admin app. Audio plays straight from the dictionary sources (CSP `media-src`).
+  Editing a card and its images need `dictionary:word:write`; the images are files in `.local/images` (set by
+  `make up` as `DICTIONARY_IMAGE_DIR`; `make reset` deletes them with the database). After a proto change
+  (new RPCs and routes) restart gatekeeper so it loads the new `descriptors.binpb`: `make down-backend && make backend`.
+  `make web` runs Vite, which has no CSP, so `blob:` images work there; to try the real CSP (`img-src ... blob:`)
+  build the apps and serve them through nginx (`web/build/nginx`).
 - **`bill` is a frame.** Its menu entry (`Invoices` needs `bill:invoice:read`) only appears for a user with that
   permission, and its page calls `/api/bill/invoices`, which no service backs yet, so the gateway answers 404 and
   the page shows it.
