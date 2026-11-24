@@ -40,3 +40,6 @@
 [submodule "dictionary"]
 	path = dictionary
 	url = https://github.com/huponx/dictionary.git
+[submodule "mm-deploy-diffs"]
+	path = mm-deploy-diffs
+	url = https://github.com/huponx/mm-deploy-diffs.git
