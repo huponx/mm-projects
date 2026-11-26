@@ -18,7 +18,7 @@ Workspace with the repositories of the platform. The root is not a git repositor
 
 ## Local stack
 
-`make up` starts everything (see [LOCAL.md](LOCAL.md)); `make status` shows what runs. The card images of the dictionary are stored in `.local/images` (`make reset` deletes them).
+`make up` starts everything (see [LOCAL.md](LOCAL.md)); `make status` shows what runs. The card images and audio of the dictionary are stored in `.local/files` (`make reset` deletes them).
 
 ## Local ports
 

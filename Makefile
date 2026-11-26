@@ -1,17 +1,17 @@
 # Local development stack from the workspace root (details and manual steps: LOCAL.md).
 # Processes run in the background; logs and pid files are in .local/run.
-.PHONY: help up backend web down down-backend down-web down-all status logs setup db reset test upgrade zip unzip replace checkout main git-reset
+.PHONY: help up backend web dict-seed dict-unseed dict-testdata-status down down-backend down-web down-all status logs setup db reset test upgrade zip unzip replace checkout main git-reset
 
 # The Go modules that have their own `make upgrade` (gocommon first: the others depend on it).
 GO_MODULES := gocommon identity gatekeeper dictionary courier bvchain
 
 help:
 	@printf '%s\n' \
-		'make up        Postgres/Redis + schema, identity-setup, identity, gatekeeper, dictionary, web apps (everything; card images are stored in .local/images)' \
-		'make backend   the same without the web apps (card images in .local/images)' \
+		'make up        Postgres/Redis + schema, identity-setup, identity, gatekeeper, dictionary and dictionary-worker, web apps (everything; card images and audio are stored in .local/files)' \
+		'make backend   the same without the web apps (card files in .local/files)' \
 		'make web       only the web apps (dict :3000, bill :3001, admin :3002)' \
-		'make down      stop identity, gatekeeper, dictionary, courier and the web apps (containers keep running)' \
-		'make down-backend  stop only identity, gatekeeper, dictionary and courier' \
+		'make down      stop identity, gatekeeper, dictionary, dictionary-worker, courier and the web apps (containers keep running)' \
+		'make down-backend  stop only identity, gatekeeper, dictionary, dictionary-worker and courier' \
 		'make down-web      stop only the web apps' \
 		'make down-all  stop them and the Postgres/Redis containers' \
 		'make status    what runs, with the URLs' \
@@ -25,10 +25,13 @@ help:
 		'make zip       pack this folder into t-projects.ipx (NAME=name for another name; a zip; without the ignored folders, see IGNORE)' \
 		'make unzip     unpack an archive: make unzip FROM=/path/file.ipx TO=/target (default: t-projects.ipx into this folder; .git folders are never overwritten; a repository in TO goes to main and pulls origin main first)' \
 		'make replace TO=/path   copy the sources over the folder /path (never touches its .git)' \
+		'make dict-seed   add saved words for a user to try the export in parts (N=60 words, KB=20 per word, EMAIL=admin@example.com)' \
+		'make dict-unseed   remove those words, the export jobs of the user and their part files' \
+		'make dict-testdata-status   how many seeded words and which export jobs the user has' \
 		'make test      go tests of identity, gatekeeper, dictionary, courier and the web checks' \
 		'' \
 		'WITH_COURIER=1 make up   also start courier and its worker' \
-		'WITH_DICTIONARY=0 make up   do not start the dictionary service (and no .local/images)' \
+		'WITH_DICTIONARY=0 make up   do not start the dictionary service (and no .local/files)' \
 		'SETUP_ADMIN_PASSWORD=... make up   admin password (default in scripts/local.sh)'
 
 up:
@@ -58,6 +61,16 @@ status:
 logs:
 	@scripts/local.sh logs $(N)
 
+# test data of the dictionary service (scripts/dict-testdata.sh): N words of KB kilobytes for the user EMAIL
+dict-seed:
+	@scripts/dict-testdata.sh seed
+
+dict-unseed:
+	@scripts/dict-testdata.sh remove
+
+dict-testdata-status:
+	@scripts/dict-testdata.sh status
+
 setup:
 	@scripts/local.sh setup
 
@@ -74,7 +87,8 @@ test:
 	cd courier && go test ./...
 	cd web && pnpm run ci
 	@if command -v helm >/dev/null; then \
-		cd dictionary/charts/dictionary && helm lint . -f ci/full-values.yaml; \
+		(cd dictionary/charts/dictionary && helm lint . -f ci/full-values.yaml) && \
+		(cd dictionary/charts/dictionary-worker && helm lint . -f ci/full-values.yaml); \
 	else echo 'helm not found: skipping the dictionary chart lint'; fi
 
 upgrade:

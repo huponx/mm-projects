@@ -10,7 +10,7 @@ Needs: Docker, Go (see `go.mod` of each service), Node 20 with `corepack` (pnpm)
 ```sh
 make up              # Postgres + Redis + schema, identity-setup, identity, gatekeeper, the three web apps
 make status          # what runs and the URLs
-make logs            # follow the logs (make logs N=gatekeeper for one)
+make logs            # follow the logs (make logs N=gatekeeper for one; N=dictionary-worker for the export jobs and the cleanup)
 make down            # stop all processes; make down-backend / make down-web stop only one side;
                      # make down-all also stops the Postgres/Redis containers
 ```
@@ -22,6 +22,16 @@ web apps), `make setup` (re-run `identity-setup`), `make reset` (wipe database a
 the Go binaries into `.local/bin`, keeps keys in `.local/`, and writes pid files and logs to `.local/run/`. The manual
 steps below are what it automates.
 
+To try the export of a long list in parts (an export job) without typing words: `make dict-seed` adds saved words to
+a user (`N=60` words of `KB=20` kilobytes each, `EMAIL=admin@example.com`; they are named `seedword1`, ... and go straight
+into the database), `make dict-testdata-status` shows them and the export jobs of the user, and `make dict-unseed`
+deletes the words, the jobs and the part files in `.local/files/exports`. The service refuses a synchronous export above
+`DICTIONARY_EXPORT_SYNC_MAX` words (default 2000; it is the default of the admin setting "Max words of an export at once", which wins once saved) and a part of a job is split above the size of the admin setting "max size of
+an export part" (`DICTIONARY_EXPORT_PART_MAX_BYTES` until an admin chooses, 3 MiB), so start the backend with small values to
+see several parts with few words: `DICTIONARY_EXPORT_SYNC_MAX=20 DICTIONARY_EXPORT_PART_MAX_BYTES=65536 make backend`. To try
+large parts (the file is streamed through gatekeeper), start it with `DICTIONARY_EXPORT_PART_MAX_BYTES_CEILING=52428800`, choose
+25 MiB under Dictionary > Export in the admin app and seed with `make dict-seed KB=60`.
+
 ## Ports
 
 | What | Port | Notes |
@@ -31,10 +41,11 @@ steps below are what it automates.
 | identity HTTP (OAuth/OIDC, sign in pages) | 8080 | default; issuer `http://localhost:8080` |
 | identity gRPC (admin API) | 9090 | default; called by the gateway |
 | gatekeeper (the gateway the web apps call) | 8081 | what `apps/*/public/config.js` points at |
-| dictionary gRPC (`make up` starts it; `WITH_DICTIONARY=0` skips it) | 9092 | `PORT` (`DICTIONARY_ISSUER`, `DICTIONARY_JWKS_URL`, `DICTIONARY_IMAGE_DIR=.local/images`; see `dictionary/.env.example`) |
+| dictionary gRPC (`make up` starts it; `WITH_DICTIONARY=0` skips it) | 9092 | `PORT` (`DICTIONARY_ISSUER`, `DICTIONARY_JWKS_URL`, `DICTIONARY_FILES_DIR=.local/files`; see `dictionary/.env.example`) |
+| dictionary-worker health (export jobs and cleanup; started with dictionary, without it an export job stays queued) | 8083 | `HEALTH_ADDR` (`DICTIONARY_FILES_DIR=.local/files`, the `DICTIONARY_EXPORT_*` of the API) |
 | courier gRPC (notifications, optional) | 9091 | `PORT` (default 9090, see below) |
 | courier worker health (optional) | 8082 | `HEALTH_ADDR` (default `:8081`, see below) |
-| web `dict` / `bill` / `admin` | 3000 / 3001 / 3002 | Vite dev servers |
+| web `dict` / `bill` / `admin` / `portal` | 3000 / 3001 / 3002 / 3004 | Vite dev servers |
 
 identity and gatekeeper use their defaults. The defaults of courier (gRPC 9090, worker health 8081) collide with
 identity and the gateway, so `courier/.env.example` moves them to 9091 and 8082 (this guide sets them explicitly too).
@@ -89,7 +100,7 @@ export GATEKEEPER_CLIENT_SECRET=$(cat ../.local/gatekeeper.secret)
 SETUP_CONFIG='{"admin":{"email":"admin@example.com","keep_password":true},
   "clients":[{"id":"gatekeeper-dev","type":"confidential","resource":"gatekeeper","secret_env":"GATEKEEPER_CLIENT_SECRET",
     "redirect_uris":["http://localhost:8081/auth/callback"],
-    "post_logout_uris":["http://localhost:3000/","http://localhost:3001/","http://localhost:3002/"],
+    "post_logout_uris":["http://localhost:3000/","http://localhost:3001/","http://localhost:3002/","http://localhost:3004/"],
     "grants":["authorization_code","refresh_token","client_credentials","urn:ietf:params:oauth:grant-type:token-exchange"]}],
   "exchange_policies":[{"client":"gatekeeper-dev","audience":"identity","max_depth":1}]}' \
   go run ./cmd/identity-setup
@@ -117,7 +128,7 @@ cd gatekeeper
 make routes
 ENV=local PORT=8081 \
 GATEKEEPER_PUBLIC_URL=http://localhost:8081 \
-GATEKEEPER_UI_ORIGINS=http://localhost:3000,http://localhost:3001,http://localhost:3002 \
+GATEKEEPER_UI_ORIGINS=http://localhost:3000,http://localhost:3001,http://localhost:3002,http://localhost:3004 \
 GATEKEEPER_ROUTES_FILE=$PWD/routes.local.yaml \
 GATEKEEPER_IDENTITY_ISSUER=http://localhost:8080 \
 GATEKEEPER_CLIENT_ID=gatekeeper-dev GATEKEEPER_CLIENT_SECRET=$(cat ../.local/gatekeeper.secret) \
@@ -151,8 +162,9 @@ Each app is its own Vite dev server on its own port. Start the ones you need, **
 | `admin` | `pnpm dev:admin` | http://localhost:3002 | identity administration: users, roles, clients, exchange policies, MFA |
 | `dict` | `pnpm dev:dict` | http://localhost:3000 | dictionary: look words up (English or English-Vietnamese), save words, export an Anki deck (needs `dictionary:word:read` / `dictionary:word:write` and the dictionary service) |
 | `bill` | `pnpm dev:bill` | http://localhost:3001 | same frame for the bill service, sample page `Invoices` |
+| `portal` | `pnpm dev:portal` | http://localhost:3004 | the root domain: the apps of the user (Dict for `member`, Bill for `billing`), profile, change password. `make up` turns registration on (`IDENTITY_REGISTRATION_ENABLED`): "Create an account" on the sign in page, the link to set the password is in the log of identity |
 
-`make dev-admin`, `make dev-dict` and `make dev-bill` do the same.
+`make dev-admin`, `make dev-dict`, `make dev-bill` and `make dev-portal` do the same.
 
 The sign in pages (`web/apps/auth`) are not one of these: identity serves their build (step 3). To change them with hot
 reload run `pnpm dev:auth` (http://localhost:3003, it proxies `/auth-api` to identity on 8080) and open the page there.
@@ -169,15 +181,15 @@ Open an app: you are sent to the identity login page (`admin@example.com` / the 
 the app. The cookie session belongs to the gateway, so signing in on one app signs you in on the others too
 (same `localhost`).
 
-- **Ports are fixed** (`strictPort`): 3000, 3001 and 3002 are the origins registered in step 3 (post logout URIs)
+- **Ports are fixed** (`strictPort`): 3000, 3001, 3002 and 3004 are the origins registered in step 3 (post logout URIs)
   and in `GATEKEEPER_UI_ORIGINS` (step 4). If a port is taken Vite stops instead of choosing another one, because
   another port would be an unknown origin (CORS and logout would fail).
 - **`dict` talks to the dictionary service** (`/api/dictionary/...`, `make up` starts it; restart gatekeeper after
   adding the service so it loads the routes). The menu and the buttons need `dictionary:word:read` (look up, list)
   and `dictionary:word:write` (save, delete, export): the admin has `*`; for another user create a role with
-  `dictionary:word:*` in the admin app. Audio plays straight from the dictionary sources (CSP `media-src`).
-  Editing a card and its images need `dictionary:word:write`; the images are files in `.local/images` (set by
-  `make up` as `DICTIONARY_IMAGE_DIR`; `make reset` deletes them with the database). After a proto change
+  `dictionary:word:*` in the admin app. Audio plays straight from the dictionary sources (CSP `media-src`), or from an uploaded file (`blob:`).
+  Editing a card and its images or audio need `dictionary:word:write`; the images and the audio files are files in `.local/files/images` and `.local/files/audio` (set by
+  `make up` as `DICTIONARY_FILES_DIR`; `make reset` deletes them with the database). After a proto change
   (new RPCs and routes) restart gatekeeper so it loads the new `descriptors.binpb`: `make down-backend && make backend`.
   `make web` runs Vite, which has no CSP, so `blob:` images work there; to try the real CSP (`img-src ... blob:`)
   build the apps and serve them through nginx (`web/build/nginx`).

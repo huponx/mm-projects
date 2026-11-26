@@ -1,20 +1,24 @@
 #!/usr/bin/env bash
 # Runs the whole local stack from the workspace root (see LOCAL.md for what each part does and for the
-# manual steps): Postgres + Redis + schema (docker), identity, gatekeeper, dictionary, optionally courier, and the
+# manual steps): Postgres + Redis + schema (docker), identity, gatekeeper, dictionary and its worker, optionally courier, and the
 # web apps. Processes run in the background; pid files and logs live in .local/run.
 #
 #   scripts/local.sh up [backend|web]   start (default: everything), idempotent
 #   scripts/local.sh down [web|backend|all]   stop all processes (default), only the web apps, only the
 #                                       backend processes, or everything including the containers
 #   scripts/local.sh status             what runs, with the URLs
-#   scripts/local.sh logs [name]        follow a log (identity, gatekeeper, dictionary, courier, courier-worker, dict, bill, admin)
+#   scripts/local.sh logs [name]        follow a log (identity, gatekeeper, dictionary, dictionary-worker, courier, courier-worker, dict, bill, admin)
 #   scripts/local.sh setup              (re)run identity-setup: first admin and the gateway client
-#   scripts/local.sh reset              wipe Postgres/Redis volumes (asks first), the local keys and the card images
+#   scripts/local.sh reset              wipe Postgres/Redis volumes (asks first), the local keys and the card files
 #
 # Variables: SETUP_ADMIN_PASSWORD (default below), WITH_COURIER=1 to start courier and its worker,
-# WITH_DICTIONARY=0 to skip the dictionary service (it is on by default). The card images of the dictionary
-# are files in .local/images; DICTIONARY_IMAGE_MAX_BYTES, _MAX_DIM, _MAX_PIXELS and _USER_QUOTA exported before
-# `up` reach the service (the defaults apply otherwise).
+# WITH_DICTIONARY=0 to skip the dictionary service (it is on by default). The card files of the dictionary
+# are files in .local/files (images/ and audio/); DICTIONARY_IMAGE_MAX_BYTES, _MAX_DIM, _MAX_PIXELS and _USER_QUOTA (and DICTIONARY_AUDIO_MAX_BYTES, _USER_QUOTA) exported before
+# `up` reach the service (the defaults apply otherwise). So do DICTIONARY_EXPORT_SYNC_MAX (words of a synchronous export,
+# above it the export is a job), DICTIONARY_EXPORT_MAX_BYTES (size of a deck, at least 65536), DICTIONARY_EXPORT_MAX_BYTES_CEILING,
+# DICTIONARY_EXPORT_PART_MAX_BYTES (size of a part of an export job), DICTIONARY_EXPORT_PART_MAX_BYTES_CEILING,
+# DICTIONARY_EXPORT_JOB_BATCH_MAX and DICTIONARY_EXPORT_JOB_TTL (at least 1h); the export jobs and the cleanup run in
+# dictionary-worker (health :8083), which gets the DICTIONARY_EXPORT_* and the file limits too. Without it an export job stays queued. GATEKEEPER_UPSTREAM_MAX_RECV_BYTES reaches gatekeeper.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -116,6 +120,7 @@ identity_env() {
   export IDENTITY_SIGNING_KEY_FILE=$LOCAL/k1.pem IDENTITY_SIGNING_KEY_ID=k1
   IDENTITY_MFA_KEY=$(cat "$LOCAL/mfa.key"); export IDENTITY_MFA_KEY
   if [ "${WITH_COURIER:-0}" = 1 ]; then export COURIER_TARGET=localhost:9091; fi
+  export IDENTITY_SESSION_IDLE_TTL=48h
 }
 
 setup() {
@@ -130,7 +135,7 @@ setup() {
   SETUP_CONFIG='{"admin":{"email":"'"$ADMIN_EMAIL"'","keep_password":true},
     "clients":[{"id":"'"$CLIENT_ID"'","type":"confidential","resource":"gatekeeper","secret_env":"GATEKEEPER_CLIENT_SECRET",
       "redirect_uris":["http://localhost:8081/auth/callback"],
-      "post_logout_uris":["http://localhost:3000/","http://localhost:3001/","http://localhost:3002/"],
+      "post_logout_uris":["http://localhost:3000/","http://localhost:3001/","http://localhost:3002/","http://localhost:3004/"],
       "grants":["authorization_code","refresh_token","client_credentials","urn:ietf:params:oauth:grant-type:token-exchange"]},
       {"id":"dictionary-dev","type":"confidential","resource":"dictionary","secret_env":"DICTIONARY_CLIENT_SECRET",
       "grants":["client_credentials","urn:ietf:params:oauth:grant-type:token-exchange"]}],
@@ -152,6 +157,8 @@ identity() {
   fi
   (cd "$ROOT/web" && pnpm --filter @huponx/auth build >/dev/null) || die "the sign in app did not build: (cd web && pnpm --filter @huponx/auth build)"
   export IDENTITY_UI_DIR="$ROOT/web/apps/auth/dist"
+  # the "Create an account" link of the sign in page; a new account gets the role member (migration V36)
+  export IDENTITY_REGISTRATION_ENABLED=true
   # listed on /apps, where a sign in at identity itself (no application sent the user) ends
   export IDENTITY_APPS="Admin Portal=http://localhost:3002|http://localhost:3002/logo.svg,Dict=http://localhost:3000|http://localhost:3000/logo.svg,Bill=http://localhost:3001"
   build identity "$ROOT/identity" ./cmd/identity
@@ -168,11 +175,12 @@ gatekeeper() {
   start_proc gatekeeper "$ROOT/gatekeeper" env \
     PORT=8081 \
     GATEKEEPER_PUBLIC_URL=http://localhost:8081 \
-    GATEKEEPER_UI_ORIGINS="http://localhost:3000,http://localhost:3001,http://localhost:3002" \
+    GATEKEEPER_UI_ORIGINS="http://localhost:3000,http://localhost:3001,http://localhost:3002,http://localhost:3004" \
     GATEKEEPER_ROUTES_FILE="$RUN/routes.yaml" \
     GATEKEEPER_IDENTITY_ISSUER=http://localhost:8080 \
     GATEKEEPER_CLIENT_ID=$CLIENT_ID GATEKEEPER_CLIENT_SECRET="$(cat "$LOCAL/gatekeeper.secret")" \
     GATEKEEPER_AUDIENCE=gatekeeper \
+    ${GATEKEEPER_UPSTREAM_MAX_RECV_BYTES:+GATEKEEPER_UPSTREAM_MAX_RECV_BYTES=$GATEKEEPER_UPSTREAM_MAX_RECV_BYTES} \
     GATEKEEPER_SESSION_KEY="$(cat "$LOCAL/session.key")" \
     "$BIN/gatekeeper"
   wait_http http://localhost:8081/healthz gatekeeper
@@ -180,14 +188,31 @@ gatekeeper() {
 
 dictionary() {
   check_port 9092 dictionary
-  say "dictionary (gRPC 9092)"
+  say "dictionary (gRPC 9092) and worker (health 8083)"
   build dictionary "$ROOT/dictionary" ./cmd/dictionary
-  mkdir -p "$LOCAL/images"
-  start_proc dictionary "$ROOT/dictionary" env PORT=9092 DICTIONARY_IMAGE_DIR="$LOCAL/images" \
+  build dictionary-worker "$ROOT/dictionary" ./cmd/dictionary-worker
+  mkdir -p "$LOCAL/files"
+  start_proc dictionary "$ROOT/dictionary" env PORT=9092 DICTIONARY_FILES_DIR="$LOCAL/files" \
     DICTIONARY_ISSUER=http://localhost:8080 DICTIONARY_JWKS_URL=http://localhost:8080/.well-known/jwks.json \
     DICTIONARY_IDENTITY_ADDR=localhost:9090 DICTIONARY_TOKEN_URL=http://localhost:8080/oauth2/token \
     DICTIONARY_CLIENT_ID=dictionary-dev DICTIONARY_CLIENT_SECRET="$(cat "$LOCAL/dictionary.secret")" \
+    ${DICTIONARY_EXPORT_SYNC_MAX:+DICTIONARY_EXPORT_SYNC_MAX=$DICTIONARY_EXPORT_SYNC_MAX} \
+    ${DICTIONARY_EXPORT_MAX_BYTES:+DICTIONARY_EXPORT_MAX_BYTES=$DICTIONARY_EXPORT_MAX_BYTES} \
+    ${DICTIONARY_EXPORT_MAX_BYTES_CEILING:+DICTIONARY_EXPORT_MAX_BYTES_CEILING=$DICTIONARY_EXPORT_MAX_BYTES_CEILING} \
+    ${DICTIONARY_EXPORT_PART_MAX_BYTES:+DICTIONARY_EXPORT_PART_MAX_BYTES=$DICTIONARY_EXPORT_PART_MAX_BYTES} \
+    ${DICTIONARY_EXPORT_PART_MAX_BYTES_CEILING:+DICTIONARY_EXPORT_PART_MAX_BYTES_CEILING=$DICTIONARY_EXPORT_PART_MAX_BYTES_CEILING} \
+    ${DICTIONARY_EXPORT_JOB_BATCH_MAX:+DICTIONARY_EXPORT_JOB_BATCH_MAX=$DICTIONARY_EXPORT_JOB_BATCH_MAX} \
+    ${DICTIONARY_EXPORT_JOB_TTL:+DICTIONARY_EXPORT_JOB_TTL=$DICTIONARY_EXPORT_JOB_TTL} \
     "$BIN/dictionary"
+  # the export jobs and the cleanup: the limits are the ones of the API (the same variables)
+  start_proc dictionary-worker "$ROOT/dictionary" env HEALTH_ADDR=:8083 DICTIONARY_FILES_DIR="$LOCAL/files" \
+    ${DICTIONARY_EXPORT_MAX_BYTES:+DICTIONARY_EXPORT_MAX_BYTES=$DICTIONARY_EXPORT_MAX_BYTES} \
+    ${DICTIONARY_EXPORT_MAX_BYTES_CEILING:+DICTIONARY_EXPORT_MAX_BYTES_CEILING=$DICTIONARY_EXPORT_MAX_BYTES_CEILING} \
+    ${DICTIONARY_EXPORT_PART_MAX_BYTES:+DICTIONARY_EXPORT_PART_MAX_BYTES=$DICTIONARY_EXPORT_PART_MAX_BYTES} \
+    ${DICTIONARY_EXPORT_PART_MAX_BYTES_CEILING:+DICTIONARY_EXPORT_PART_MAX_BYTES_CEILING=$DICTIONARY_EXPORT_PART_MAX_BYTES_CEILING} \
+    ${DICTIONARY_EXPORT_JOB_BATCH_MAX:+DICTIONARY_EXPORT_JOB_BATCH_MAX=$DICTIONARY_EXPORT_JOB_BATCH_MAX} \
+    ${DICTIONARY_EXPORT_JOB_TTL:+DICTIONARY_EXPORT_JOB_TTL=$DICTIONARY_EXPORT_JOB_TTL} \
+    "$BIN/dictionary-worker"
   local i
   for i in $(seq 1 50); do
     port_free 9092 || return 0
@@ -212,17 +237,17 @@ courier() {
 
 web() {
   need pnpm
-  say "web apps (dict :3000, bill :3001, admin :3002)"
+  say "web apps (dict :3000, bill :3001, admin :3002, portal :3004)"
   if [ ! -d "$ROOT/web/node_modules" ]; then
     (cd "$ROOT/web" && corepack enable >/dev/null 2>&1 || true; cd "$ROOT/web" && pnpm install)
   fi
   local app port
-  for pair in dict:3000 bill:3001 admin:3002; do
+  for pair in dict:3000 bill:3001 admin:3002 portal:3004; do
     app=${pair%%:*}; port=${pair##*:}
     check_port "$port" "$app"
     start_proc "$app" "$ROOT/web" pnpm "dev:$app"
   done
-  for pair in dict:3000 bill:3001 admin:3002; do
+  for pair in dict:3000 bill:3001 admin:3002 portal:3004; do
     wait_http "http://localhost:${pair##*:}/" "${pair%%:*}" 90
   done
 }
@@ -251,15 +276,15 @@ cmd_up() {
   echo
   cmd_status
   echo
-  echo "Open http://localhost:3002 and sign in as $ADMIN_EMAIL (password: SETUP_ADMIN_PASSWORD, default in scripts/local.sh)."
+  echo "Open http://localhost:3004 (the portal: your apps, profile, password) or http://localhost:3002 (admin) and sign in as $ADMIN_EMAIL (password: SETUP_ADMIN_PASSWORD, default in scripts/local.sh)."
 }
 
 cmd_down() {
   local what=${1:-processes} names
   case "$what" in
-    processes|all) names="admin bill dict courier-worker courier dictionary gatekeeper identity" ;;
-    web)           names="admin bill dict" ;;
-    backend)       names="courier-worker courier dictionary gatekeeper identity" ;;
+    processes|all) names="portal admin bill dict courier-worker courier dictionary-worker dictionary gatekeeper identity" ;;
+    web)           names="portal admin bill dict" ;;
+    backend)       names="courier-worker courier dictionary-worker dictionary gatekeeper identity" ;;
     *) die "usage: down [web|backend|all]" ;;
   esac
   say "stopping"
@@ -270,8 +295,8 @@ cmd_down() {
 cmd_status() {
   printf '%-16s %-8s %s\n' NAME STATE URL
   local n url
-  for e in identity:http://localhost:8080 gatekeeper:http://localhost:8081 dictionary:localhost:9092 courier:localhost:9091 \
-           courier-worker:http://localhost:8082 dict:http://localhost:3000 bill:http://localhost:3001 admin:http://localhost:3002; do
+  for e in identity:http://localhost:8080 gatekeeper:http://localhost:8081 dictionary:http://localhost:9092 dictionary-worker:http://localhost:8083 courier:http://localhost:9091 \
+           courier-worker:http://localhost:8082 dict:http://localhost:3000 bill:http://localhost:3001 admin:http://localhost:3002 portal:http://localhost:3004; do
     n=${e%%:*}; url=${e#*:}
     if alive "$n"; then printf '%-16s %-8s %s\n' "$n" running "$url"; else printf '%-16s %-8s\n' "$n" stopped; fi
   done
@@ -283,11 +308,11 @@ cmd_logs() {
 }
 
 cmd_reset() {
-  read -r -p "Delete Postgres and Redis data, the local keys and the card images (.local/images) in .local? [y/N] " a
+  read -r -p "Delete Postgres and Redis data, the local keys and the card files and audio (.local/files) in .local? [y/N] " a
   [ "$a" = y ] || exit 0
   cmd_down
   compose down -v
-  rm -rf "$LOCAL/images"
+  rm -rf "$LOCAL/files"
   rm -f "$LOCAL"/k1.pem "$LOCAL"/mfa.key "$LOCAL"/session.key "$LOCAL"/gatekeeper.secret
   echo "reset done; run: scripts/local.sh up"
 }
