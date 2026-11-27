@@ -23,7 +23,7 @@ help:
 		'make checkout main   every sub-folder that is a git repository goes to main (stops when one has uncommitted changes)' \
 		'make git-reset   asks first, then drops every uncommitted change and deletes new uncommitted files in the sub-folders that are git repositories' \
 		'make zip       pack this folder into t-projects.ipx (NAME=name for another name; a zip; without the ignored folders, see IGNORE)' \
-		'make unzip     unpack an archive: make unzip FROM=/path/file.ipx TO=/target (default: t-projects.ipx into this folder; .git folders are never overwritten; a repository in TO goes to main and pulls origin main first)' \
+		'make unzip     unpack an archive: make unzip FROM=/path/file.ipx TO=/target (default: t-projects.ipx into this folder; .git folders are never overwritten; a repository in TO goes to main and pulls origin main first; files in TO that are not in the archive are deleted, except .git and the IGNORE folders)' \
 		'make replace TO=/path   copy the sources over the folder /path (never touches its .git)' \
 		'make dict-seed   add saved words for a user to try the export in parts (N=60 words, KB=20 per word, EMAIL=admin@example.com)' \
 		'make dict-unseed   remove those words, the export jobs of the user and their part files' \
@@ -98,7 +98,7 @@ upgrade:
 	done
 
 # What zip and replace leave out: local state, caches output.
-IGNORE := .local .memsearch .pnpm-store node_modules dist coverage .turbo .DS_Store .venv mm-deploy-diffs go-anki-deck
+IGNORE := .local .memsearch .pnpm-store node_modules dist coverage .turbo .DS_Store .venv mm-deploy-diffs go-anki-deck protogen
 # NAME is the name of the archive without the extension (make zip NAME=backup -> backup.ipx).
 NAME ?= t-projects
 IPX ?= $(NAME).ipx
@@ -110,13 +110,14 @@ zip:
 	@mv $(IPX).zip $(IPX)
 	@echo "$(IPX) ($$(du -h $(IPX) | cut -f1))"
 
-# The reverse of zip: unpacks the archive FROM (default t-projects.ipx) into the folder TO (default: here); files that exist are overwritten, except what is in a .git folder. A sub-folder of TO that is a git repository is put on main and pulls
+# The reverse of zip: unpacks the archive FROM (default t-projects.ipx) into the folder TO (default: here); files that exist are overwritten, except what is in a .git folder; what is in TO but not in the archive is deleted (never .git or the IGNORE names). A sub-folder of TO that is a git repository is put on main and pulls
 # origin main first (the unzip stops when one has uncommitted changes or cannot pull); without .git it is unpacked as is.
 unzip:
 	@test -f "$(or $(FROM),t-projects.ipx)" || { echo "$(or $(FROM),t-projects.ipx) not found (make unzip FROM=/path/file.ipx TO=/target)" >&2; exit 1; }
 	@mkdir -p "$(or $(TO),.)"
 	@scripts/checkout-main.sh "$(or $(TO),.)" main pull
 	@unzip -qo "$(or $(FROM),t-projects.ipx)" -d "$(or $(TO),.)" -x '.git/*' '*/.git/*'
+	@scripts/unzip-prune.sh "$(or $(FROM),t-projects.ipx)" "$(or $(TO),.)" $(IGNORE)
 	@echo "unpacked $(or $(FROM),t-projects.ipx) into $(or $(TO),.)"
 
 # Copies the sources over TO (files that exist are overwritten, nothing is deleted); a .git folder is left alone.
